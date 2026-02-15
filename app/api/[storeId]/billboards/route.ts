@@ -1,5 +1,7 @@
-import prismadb from "@/lib/prismadb";
+import { db } from "@/lib/db";
+import { billboards, stores } from "@/lib/schema";
 import { auth } from "@clerk/nextjs";
+import { eq, and } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 export async function POST(
@@ -7,13 +9,12 @@ export async function POST(
   { params }: { params: { storeId: string } },
 ) {
   try {
-    const { userId } = auth(); // we have access to the user id here that wants to create new store using our api
-
+    const { userId } = auth();
     const body = await req.json();
     const { label, imageUrl } = body;
 
     if (!userId) {
-      return new NextResponse("Unautheticated", { status: 401 });
+      return new NextResponse("Unauthenticated", { status: 401 });
     }
     if (!label) {
       return new NextResponse("Label is required", { status: 400 });
@@ -21,32 +22,22 @@ export async function POST(
     if (!imageUrl) {
       return new NextResponse("Image URL is required", { status: 400 });
     }
-
     if (!params.storeId) {
       return new NextResponse("Store ID is required", { status: 400 });
     }
 
-    //! check if the storeId exists for the authenticated user
-
-    const storeByUserId = await prismadb.store.findFirst({
-      where: {
-        id: params.storeId,
-        userId,
-      },
+    const storeByUserId = await db.query.stores.findFirst({
+      where: and(eq(stores.id, params.storeId), eq(stores.userId, userId)),
     });
 
     if (!storeByUserId) {
       return new NextResponse("Unauthorized", { status: 403 });
     }
-    // create new billboard using prisma client instance and return the billboard data to the client
 
-    const billboard = await prismadb.billboard.create({
-      data: {
-        label,
-        imageUrl,
-        storeId: params.storeId,
-      },
-    });
+    const [billboard] = await db
+      .insert(billboards)
+      .values({ label, imageUrl, storeId: params.storeId })
+      .returning();
 
     return NextResponse.json(billboard);
   } catch (error) {
@@ -55,32 +46,20 @@ export async function POST(
   }
 }
 
-// Getting all the billboards for a store by storeId
-
 export async function GET(
   req: Request,
   { params }: { params: { storeId: string } },
 ) {
   try {
-    const { userId } = auth(); // we have access to the user id here that wants to create new store using our api
-
-    if (!userId) {
-      return new NextResponse("Unautheticated", { status: 401 });
-    }
-
     if (!params.storeId) {
       return new NextResponse("Store ID is required", { status: 400 });
     }
 
-    // get all the billboards for the storeId
-
-    const billboards = await prismadb.billboard.findMany({
-      where: {
-        storeId: params.storeId,
-      },
+    const result = await db.query.billboards.findMany({
+      where: eq(billboards.storeId, params.storeId),
     });
 
-    return NextResponse.json(billboards);
+    return NextResponse.json(result);
   } catch (error) {
     console.log(`[BILLBOARDS_GET] ${error}`, error);
     return new NextResponse("Internal Server Error", { status: 500 });

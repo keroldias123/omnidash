@@ -1,7 +1,8 @@
-import { NextResponse } from "next/server";
+import { db } from "@/lib/db";
+import { categories, stores } from "@/lib/schema";
 import { auth } from "@clerk/nextjs";
-
-import prismadb from "@/lib/prismadb";
+import { eq, and } from "drizzle-orm";
+import { NextResponse } from "next/server";
 
 export async function GET(
   req: Request,
@@ -12,12 +13,12 @@ export async function GET(
       return new NextResponse("Category id is required", { status: 400 });
     }
 
-    const category = await prismadb.category.findUnique({
-      where: {
-        id: params.categoryId,
-      },
-      include: {
+    const category = await db.query.categories.findFirst({
+      where: eq(categories.id, params.categoryId),
+      with: {
         billboard: true,
+        parent: true,
+        children: true,
       },
     });
 
@@ -43,22 +44,24 @@ export async function DELETE(
       return new NextResponse("Category id is required", { status: 400 });
     }
 
-    const storeByUserId = await prismadb.store.findFirst({
-      where: {
-        id: params.storeId,
-        userId,
-      },
+    const storeByUserId = await db.query.stores.findFirst({
+      where: and(eq(stores.id, params.storeId), eq(stores.userId, userId)),
     });
 
     if (!storeByUserId) {
       return new NextResponse("Unauthorized", { status: 405 });
     }
 
-    const category = await prismadb.category.delete({
-      where: {
-        id: params.categoryId,
-      },
-    });
+    // First, set children's parentId to null
+    await db
+      .update(categories)
+      .set({ parentId: null, updatedAt: new Date() })
+      .where(eq(categories.parentId, params.categoryId));
+
+    const [category] = await db
+      .delete(categories)
+      .where(eq(categories.id, params.categoryId))
+      .returning();
 
     return NextResponse.json(category);
   } catch (error) {
@@ -73,17 +76,11 @@ export async function PATCH(
 ) {
   try {
     const { userId } = auth();
-
     const body = await req.json();
-
-    const { name, billboardId } = body;
+    const { name, billboardId, parentId } = body;
 
     if (!userId) {
       return new NextResponse("Unauthenticated", { status: 403 });
-    }
-
-    if (!billboardId) {
-      return new NextResponse("Billboard ID is required", { status: 400 });
     }
 
     if (!name) {
@@ -94,26 +91,31 @@ export async function PATCH(
       return new NextResponse("Category id is required", { status: 400 });
     }
 
-    const storeByUserId = await prismadb.store.findFirst({
-      where: {
-        id: params.storeId,
-        userId,
-      },
+    const storeByUserId = await db.query.stores.findFirst({
+      where: and(eq(stores.id, params.storeId), eq(stores.userId, userId)),
     });
 
     if (!storeByUserId) {
       return new NextResponse("Unauthorized", { status: 405 });
     }
 
-    const category = await prismadb.category.update({
-      where: {
-        id: params.categoryId,
-      },
-      data: {
+    // Prevent self-referencing
+    if (parentId === params.categoryId) {
+      return new NextResponse("Category cannot be its own parent", {
+        status: 400,
+      });
+    }
+
+    const [category] = await db
+      .update(categories)
+      .set({
         name,
-        billboardId,
-      },
-    });
+        billboardId: billboardId || null,
+        parentId: parentId || null,
+        updatedAt: new Date(),
+      })
+      .where(eq(categories.id, params.categoryId))
+      .returning();
 
     return NextResponse.json(category);
   } catch (error) {

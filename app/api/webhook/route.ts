@@ -3,7 +3,9 @@ import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { stripe } from "@/lib/stripe";
-import prismadb from "@/lib/prismadb";
+import { db } from "@/lib/db";
+import { orders, orderItems, products } from "@/lib/schema";
+import { eq, inArray } from "drizzle-orm";
 
 export async function POST(req: Request) {
   const body = await req.text();
@@ -33,35 +35,32 @@ export async function POST(req: Request) {
     address?.country,
   ];
 
-  const addressString = addressComponents.filter(c => c !== null).join(", ");
+  const addressString = addressComponents.filter((c) => c !== null).join(", ");
 
   if (event.type === "checkout.session.completed") {
-    const order = await prismadb.order.update({
-      where: {
-        id: session?.metadata?.orderId,
-      },
-      data: {
+    const [order] = await db
+      .update(orders)
+      .set({
         isPaid: true,
         address: addressString,
         phone: session?.customer_details?.phone || "",
-      },
-      include: {
-        orderItems: true,
-      },
+        updatedAt: new Date(),
+      })
+      .where(eq(orders.id, session?.metadata?.orderId!))
+      .returning();
+
+    const items = await db.query.orderItems.findMany({
+      where: eq(orderItems.orderId, order.id),
     });
 
-    const productIds = order.orderItems.map(orderItem => orderItem.productId);
+    const productIds = items.map((item) => item.productId);
 
-    await prismadb.product.updateMany({
-      where: {
-        id: {
-          in: [...productIds],
-        },
-      },
-      data: {
-        isArchived: true,
-      },
-    });
+    if (productIds.length > 0) {
+      await db
+        .update(products)
+        .set({ isArchived: true, updatedAt: new Date() })
+        .where(inArray(products.id, productIds));
+    }
   }
 
   return new NextResponse(null, { status: 200 });

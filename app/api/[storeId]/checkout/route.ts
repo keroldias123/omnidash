@@ -2,7 +2,9 @@ import Stripe from "stripe";
 import { NextResponse } from "next/server";
 
 import { stripe } from "@/lib/stripe";
-import prismadb from "@/lib/prismadb";
+import { db } from "@/lib/db";
+import { products, orders, orderItems } from "@/lib/schema";
+import { inArray } from "drizzle-orm";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -24,17 +26,13 @@ export async function POST(
     return new NextResponse("Product ids are required", { status: 400 });
   }
 
-  const products = await prismadb.product.findMany({
-    where: {
-      id: {
-        in: productIds,
-      },
-    },
+  const productList = await db.query.products.findMany({
+    where: inArray(products.id, productIds),
   });
 
   const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = [];
 
-  products.forEach(product => {
+  productList.forEach((product) => {
     line_items.push({
       quantity: 1,
       price_data: {
@@ -42,26 +40,26 @@ export async function POST(
         product_data: {
           name: product.name,
         },
-        unit_amount: product.price.toNumber() * 100,
+        unit_amount: Number(product.price) * 100,
       },
     });
   });
 
-  const order = await prismadb.order.create({
-    data: {
+  const [order] = await db
+    .insert(orders)
+    .values({
       storeId: params.storeId,
       isPaid: false,
-      orderItems: {
-        create: productIds.map((productId: string) => ({
-          product: {
-            connect: {
-              id: productId,
-            },
-          },
-        })),
-      },
-    },
-  });
+    })
+    .returning();
+
+  // Insert order items
+  await db.insert(orderItems).values(
+    productIds.map((productId: string) => ({
+      orderId: order.id,
+      productId,
+    })),
+  );
 
   const session = await stripe.checkout.sessions.create({
     line_items,

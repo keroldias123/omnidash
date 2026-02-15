@@ -1,5 +1,7 @@
-import prismadb from "@/lib/prismadb";
+import { db } from "@/lib/db";
+import { stores } from "@/lib/schema";
 import { auth } from "@clerk/nextjs";
+import { eq, and } from "drizzle-orm";
 import { NextResponse } from "next/server";
 
 export async function PATCH(
@@ -22,23 +24,16 @@ export async function PATCH(
       return new NextResponse("Store ID is Required", { status: 400 });
     }
 
-    // find and update store
+    const [store] = await db
+      .update(stores)
+      .set({ name, updatedAt: new Date() })
+      .where(and(eq(stores.id, storeId), eq(stores.userId, userId)))
+      .returning();
 
-    const store = await prismadb.store.updateMany({
-      where: {
-        id: storeId,
-        userId,
-      },
-      data: {
-        name,
-      },
-    });
     return NextResponse.json(store);
   } catch (error: any) {
     console.log(`[STORE_PATCH] `, error);
-    return new NextResponse("Internal Server Error", {
-      status: 500,
-    });
+    return new NextResponse("Internal Server Error", { status: 500 });
   }
 }
 
@@ -57,19 +52,14 @@ export async function DELETE(
       return new NextResponse("Store ID is Required", { status: 400 });
     }
 
-    // find and update store
+    const [store] = await db
+      .delete(stores)
+      .where(and(eq(stores.id, storeId), eq(stores.userId, userId)))
+      .returning();
 
-    const store = await prismadb.store.deleteMany({
-      where: {
-        id: storeId,
-        userId,
-      },
-    });
     return NextResponse.json(store);
   } catch (error: any) {
     console.log(`[STORE_DELETE] `, error);
-    return new NextResponse("Internal Server Error", {
-      status: 500,
-    });
+    return new NextResponse("Internal Server Error", { status: 500 });
   }
 }
